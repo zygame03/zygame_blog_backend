@@ -1,7 +1,7 @@
 package constants
 
 const (
-	CONFIG_PATH = "config.json"
+	CONFIG_PATH = "../config.json"
 )
 
 const (
