@@ -1,33 +1,63 @@
 package main
 
 import (
+	"context"
 	"log"
-	"my_web/backend/internal/constants"
-	"my_web/backend/internal/global"
-	"my_web/backend/internal/routers"
-
-	"github.com/gin-gonic/gin"
+	"my_web/backend/internal/article"
+	"my_web/backend/internal/config"
+	"my_web/backend/internal/httpserver"
+	"my_web/backend/internal/infra"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 func main() {
-	r := gin.Default()
-
 	// 读取配置
-	config, err := global.ReadConfig(constants.CONFIG_PATH)
+	config, err := config.ReadConfig("config/", "config", "json")
 	if err != nil {
 		log.Fatalf("读取配置失败: %v", err)
 	}
 
 	// 初始化应用依赖
-	if err := global.Init(config, r); err != nil {
-		log.Fatalf("初始化失败: %v", err)
+	db, err := infra.InitDatabase(&config.Database)
+	if err != nil {
+		return
 	}
 
-	// 注册路由
-	routers.RegisterHandlers(r)
-
-	// 启动服务
-	if err := r.Run(":8080"); err != nil {
-		log.Fatalf("服务启动失败: %v", err)
+	rdb, err := infra.InitRedis(&config.Redis)
+	if err != nil {
+		return
 	}
+
+	ctx := context.Background()
+	articleServ := article.NewArticleService(ctx, db, rdb)
+	articleHandler := article.NewHandler(articleServ)
+
+	// 在 goroutine 中启动服务
+	srv := httpserver.NewHttpserver(
+		&config.Httpserver,
+		articleHandler,
+	)
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+
+	// 优雅退出处理
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("正在关闭服务...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("Server Shutdown:", err)
+	}
+	log.Println("服务已退出")
 }
