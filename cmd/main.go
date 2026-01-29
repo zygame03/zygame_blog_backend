@@ -23,13 +23,14 @@ func main() {
 
 	// 初始化应用依赖
 	db, err := infra.InitDatabase(&config.Database)
+
 	if err != nil {
-		return
+		log.Fatalf("初始化数据库失败: %v", err)
 	}
 
 	rdb, err := infra.InitRedis(&config.Redis)
 	if err != nil {
-		return
+		log.Fatalf("初始化Redis失败: %v", err)
 	}
 
 	ctx := context.Background()

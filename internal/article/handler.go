@@ -19,7 +19,7 @@ func NewHandler(s *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(e *gin.Engine) {
-	r := e.Group("/article")
+	r := e.Group("/api/article")
 	{
 		r.GET("", h.getArticles)
 		r.GET("/hotArticles", h.getHotArticles)

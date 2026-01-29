@@ -10,16 +10,16 @@ import (
 )
 
 type Service struct {
-	DB  *Database
-	RDB *Cache
+	DB  *gorm.DB
+	RDB *redis.Client
 
 	task utils.TaskRunner
 }
 
 func NewArticleService(ctx context.Context, db *gorm.DB, rdb *redis.Client) *Service {
 	service := &Service{
-		DB:  NewDatabase(db),
-		RDB: NewArticleCache(rdb),
+		DB:  db,
+		RDB: rdb,
 	}
 
 	service.task = *utils.NewTaskRunner(
@@ -34,83 +34,83 @@ func NewArticleService(ctx context.Context, db *gorm.DB, rdb *redis.Client) *Ser
 }
 
 func (s *Service) Run(ctx context.Context) {
-	ids, err := s.DB.GetAllArticleIDs()
+	ids, err := repoGetAllArticleIDs(s.DB)
 	if err != nil {
 		return
 	}
 
 	for _, id := range ids {
-		num, err := s.RDB.GetViewUV(ctx, id)
+		num, err := cacheGetViewUV(ctx, s.RDB, id)
 		if err != nil || num == 0 {
 			continue
 		}
 
-		err = s.RDB.DelViewUV(ctx, id)
+		err = cacheDelViewUV(ctx, s.RDB, id)
 		if err != nil {
 			continue
 		}
 
-		_ = s.DB.IncrementViews(id, num)
+		_ = repoIncrementViews(s.DB, id, num)
 	}
 }
 
 // 分页查找
 func (s *Service) GetArticlesByPage(ctx context.Context, page, pageSize int) ([]ArticleWithoutContent, int, error) {
-	articles, total, err := s.RDB.GetArticlesByPage(ctx, page, pageSize)
+	articles, total, err := cacheGetArticlesByPage(ctx, s.RDB, page, pageSize)
 	if err == nil {
 		return articles, total, nil
 	}
 
 	if err == ErrCacheMiss {
-		articles, total, err = s.DB.GetArticlesByPage(page, pageSize)
+		articles, total, err = repoGetArticlesByPage(s.DB, page, pageSize)
 		if err != nil {
 			return nil, 0, err
 		}
 
-		s.RDB.SetArticlesByPage(ctx, page, pageSize, articles, total)
+		cacheSetArticlesByPage(ctx, s.RDB, page, pageSize, articles, total)
 		return articles, total, nil
 	}
 
-	return s.DB.GetArticlesByPage(page, pageSize)
+	return repoGetArticlesByPage(s.DB, page, pageSize)
 }
 
 // 获取热门文章，目前只基于view数，后续增加其他项综合判断
 func (s *Service) GetArticlesByPopular(ctx context.Context, limit int) ([]ArticleWithoutContent, error) {
-	articles, err := s.RDB.GetArticlesByPopular(ctx, limit)
+	articles, err := cacheGetArticlesByPopular(ctx, s.RDB, limit)
 	if err == nil {
 		return articles, nil
 	}
 
 	if err == ErrCacheMiss {
-		articles, err = s.DB.GetArticlesByPopular(limit)
+		articles, err = repoGetArticlesByPopular(s.DB, limit)
 		if err != nil {
 			return nil, err
 		}
 
-		go s.RDB.SetArticlesByPopular(ctx, limit, articles)
+		go cacheSetArticlesByPopular(ctx, s.RDB, limit, articles)
 		return articles, nil
 	}
 
-	return s.DB.GetArticlesByPopular(limit)
+	return repoGetArticlesByPopular(s.DB, limit)
 }
 
 // 通过ID获取文章，获取后增加views
 // userID: 用户标识，可以是用户ID或IP地址，用于防重复计数
 func (s *Service) GetArticleByID(ctx context.Context, id int, userID string) (*Article, error) {
 	// cache hit
-	article, err := s.RDB.GetArticleByID(ctx, id)
+	article, err := cacheGetArticleByID(ctx, s.RDB, id)
 	if err == nil {
-		s.RDB.AddViewUV(ctx, id, userID)
+		cacheAddViewUV(ctx, s.RDB, id, userID)
 		return article, nil
 	} else {
-		article, err = s.DB.GetArticleByID(id)
+		article, err = repoGetArticleByID(s.DB, id)
 		if err != nil {
 			return nil, err
 		}
 
 		// sync write-back to the DB and increasing views
-		s.RDB.AddViewUV(ctx, id, userID)
-		s.RDB.SetArticleByID(ctx, id, article)
+		cacheAddViewUV(ctx, s.RDB, id, userID)
+		cacheSetArticleByID(ctx, s.RDB, id, article)
 		return article, nil
 	}
 }
